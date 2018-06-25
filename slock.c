@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/types.h>
 #include <X11/extensions/Xrandr.h>
 #include <X11/keysym.h>
@@ -23,6 +24,9 @@
 #include "util.h"
 
 char *argv0;
+
+char *message;
+time_t tim;
 
 enum {
 	INIT,
@@ -60,6 +64,87 @@ die(const char *errstr, ...)
 #ifdef __linux__
 #include <fcntl.h>
 #include <linux/oom.h>
+
+static void
+draw_text(Display *dpy, Window win, int reverse, int screen)
+{
+
+        int len, line_len, width, height, i, j, k, newlines, tab_replace;
+        XGCValues gr_values;
+        XFontStruct *fontinfo;
+        GC gc;
+        fontinfo = XLoadQueryFont(dpy,"6x10");
+        XColor color_b, dummy;
+        gr_values.font = fontinfo->fid;
+        gr_values.foreground = color_b.pixel;
+        gc=XCreateGC(dpy,win,GCFont+GCForeground, &gr_values);
+        
+        if (reverse)
+                XSetForeground(dpy, gc, WhitePixel(dpy, screen));
+
+	
+        len = strlen(message);
+
+	newlines = 0;
+	line_len = 1;
+	j = 0;
+	for (i = 0; i < len; i++) {
+	  if (message[i] == '\n') {
+	    newlines = 1;
+	    if (i - j > line_len)
+	      line_len = i - j;
+	    i++;
+	    j = i;
+	  }
+	}
+	
+
+	if (!newlines) {
+
+	  line_len = len;
+	  height = DisplayHeight(dpy, screen)*3/7;
+	  width  = (DisplayWidth(dpy, screen) - XTextWidth(fontinfo, message, line_len) - line_len)/2;
+	  XDrawString(dpy, win, gc, width, height, message, len);
+	  return;
+	} 
+
+
+	height = DisplayHeight(dpy, screen)*3/7;
+	width  = (DisplayWidth(dpy, screen) - XTextWidth(fontinfo, message, line_len) - line_len)/2;
+
+	k = 0;
+	j = 0;
+	for (i = 0; i < len; i++) {
+	  if (message[i] == '\n') {
+
+	    tab_replace = 0;
+	    while (message[j] == '\t' && j < i) {
+	      tab_replace++;
+	      j++;
+	    }
+	    
+	    XDrawString(dpy, win, gc, width + 32*tab_replace, height + 20*k, message + j, i - j);
+	    while (message[i] == '\n') {
+	      i++;
+	      j = i;
+	      k++;
+	    }
+	  }
+	}
+
+	tab_replace = 0;
+	while (j < i) {
+	  if (message[j] == '\t') {
+	    tab_replace++;
+	    j++;
+	  }
+	  else
+	    break;
+	}
+	XDrawString(dpy, win, gc, width + (32*tab_replace), height + 20*k, message + j, i - j);
+	
+}
+
 
 static void
 dontkillme(void)
@@ -141,6 +226,7 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 	oldc = INIT;
 
 	while (running && !XNextEvent(dpy, &ev)) {
+	        running = !((time(NULL) - tim < timetocancel) && (ev.type == MotionNotify));
 		if (ev.type == KeyPress) {
 			explicit_bzero(&buf, sizeof(buf));
 			num = XLookupString(&ev.xkey, buf, sizeof(buf), &ksym, 0);
@@ -180,8 +266,9 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 					passwd[--len] = '\0';
 				break;
 			default:
-				if (num && !iscntrl((int)buf[0]) &&
-				    (len + num < sizeof(passwd))) {
+				if (controlkeyclear && iscntrl((int)buf[0]))
+					continue;
+				if (num && (len + num < sizeof(passwd))) {
 					memcpy(passwd + len, buf, num);
 					len += num;
 				}
@@ -194,6 +281,7 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 					                     locks[screen]->win,
 					                     locks[screen]->colors[color]);
 					XClearWindow(dpy, locks[screen]->win);
+                                        draw_text(dpy, locks[screen]->win, 0, screen);
 				}
 				oldc = color;
 			}
@@ -276,6 +364,7 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 				XRRSelectInput(dpy, lock->win, RRScreenChangeNotifyMask);
 
 			XSelectInput(dpy, lock->root, SubstructureNotifyMask);
+			tim = time(NULL);
 			return lock;
 		}
 
@@ -300,7 +389,7 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 static void
 usage(void)
 {
-	die("usage: slock [-v] [cmd [arg ...]]\n");
+	die("usage: slock [-v] [-m message] [cmd [arg ...]]\n");
 }
 
 int
@@ -315,10 +404,15 @@ main(int argc, char **argv) {
 	Display *dpy;
 	int s, nlocks, nscreens;
 
+	message = default_message;
+	
 	ARGBEGIN {
 	case 'v':
 		fprintf(stderr, "slock-"VERSION"\n");
 		return 0;
+	case 'm':
+		message = EARGF(usage());
+		break;
 	default:
 		usage();
 	} ARGEND
@@ -363,10 +457,12 @@ main(int argc, char **argv) {
 	if (!(locks = calloc(nscreens, sizeof(struct lock *))))
 		die("slock: out of memory\n");
 	for (nlocks = 0, s = 0; s < nscreens; s++) {
-		if ((locks[s] = lockscreen(dpy, &rr, s)) != NULL)
+		if ((locks[s] = lockscreen(dpy, &rr, s)) != NULL) {
+		        draw_text(dpy, locks[s]->win, 0, s);
 			nlocks++;
-		else
+                } else {
 			break;
+                }
 	}
 	XSync(dpy, 0);
 
