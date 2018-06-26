@@ -25,7 +25,6 @@
 
 char *argv0;
 
-char *message;
 time_t tim;
 
 enum {
@@ -66,83 +65,67 @@ die(const char *errstr, ...)
 #include <linux/oom.h>
 
 static void
-draw_text(Display *dpy, Window win, int reverse, int screen)
+writemessage(Display *dpy, Window win, int screen)
 {
+	int len, line_len, width, height, i, j, k, tab_replace, tab_size;
+	XGCValues gr_values;
+	XFontStruct *fontinfo;
+	XColor color, dummy;
+	GC gc;
+	fontinfo = XLoadQueryFont(dpy, text_size);
+	tab_size = 8 * XTextWidth(fontinfo, " ", 1);
 
-        int len, line_len, width, height, i, j, k, newlines, tab_replace;
-        XGCValues gr_values;
-        XFontStruct *fontinfo;
-        GC gc;
-        fontinfo = XLoadQueryFont(dpy,"6x10");
-        XColor color_b, dummy;
-        gr_values.font = fontinfo->fid;
-        gr_values.foreground = color_b.pixel;
-        gc=XCreateGC(dpy,win,GCFont+GCForeground, &gr_values);
-        
-        if (reverse)
-                XSetForeground(dpy, gc, WhitePixel(dpy, screen));
+	XAllocNamedColor(dpy, DefaultColormap(dpy, screen),
+			 text_color, &color, &dummy);
 
-	
-        len = strlen(message);
-
-	newlines = 0;
-	line_len = 1;
-	j = 0;
-	for (i = 0; i < len; i++) {
-	  if (message[i] == '\n') {
-	    newlines = 1;
-	    if (i - j > line_len)
-	      line_len = i - j;
-	    i++;
-	    j = i;
-	  }
-	}
-	
-
-	if (!newlines) {
-
-	  line_len = len;
-	  height = DisplayHeight(dpy, screen)*3/7;
-	  width  = (DisplayWidth(dpy, screen) - XTextWidth(fontinfo, message, line_len) - line_len)/2;
-	  XDrawString(dpy, win, gc, width, height, message, len);
-	  return;
-	} 
+	gr_values.font = fontinfo->fid;
+	gr_values.foreground = color.pixel;
+	gc=XCreateGC(dpy,win,GCFont+GCForeground, &gr_values);
 
 
-	height = DisplayHeight(dpy, screen)*3/7;
-	width  = (DisplayWidth(dpy, screen) - XTextWidth(fontinfo, message, line_len) - line_len)/2;
+	/* 
+	 * Start formatting and drawing text 
+	 */
 
+	len = strlen(message);
+
+	/* Max max line length (cut at '\n') */
+	line_len = 0;
 	k = 0;
-	j = 0;
-	for (i = 0; i < len; i++) {
-	  if (message[i] == '\n') {
-
-	    tab_replace = 0;
-	    while (message[j] == '\t' && j < i) {
-	      tab_replace++;
-	      j++;
-	    }
-	    
-	    XDrawString(dpy, win, gc, width + 32*tab_replace, height + 20*k, message + j, i - j);
-	    while (message[i] == '\n') {
-	      i++;
-	      j = i;
-	      k++;
-	    }
-	  }
+	for (i = j = 0; i < len; i++) {
+		if (message[i] == '\n') {
+			if (i - j > line_len)
+				line_len = i - j;
+			k++;
+			i++;
+			j = i;
+		}
 	}
+	/* If there is only one line */
+	if (line_len == 0)
+		line_len = len;
 
-	tab_replace = 0;
-	while (j < i) {
-	  if (message[j] == '\t') {
-	    tab_replace++;
-	    j++;
-	  }
-	  else
-	    break;
+	height = DisplayHeight(dpy, screen)*3/7 - (k*20)/3;
+	width  = (DisplayWidth(dpy, screen) - XTextWidth(fontinfo, message, line_len))/2;
+
+	/* Look for '\n' and print the text between them. */
+	for (i = j = k = 0; i <= len; i++) {
+		/* i == len is the special case for the last line */
+		if (i == len || message[i] == '\n') {
+			tab_replace = 0;
+			while (message[j] == '\t' && j < i) {
+				tab_replace++;
+				j++;
+			}
+
+			XDrawString(dpy, win, gc, width + tab_size*tab_replace, height + 20*k, message + j, i - j);
+			while (i < len && message[i] == '\n') {
+				i++;
+				j = i;
+				k++;
+			}
+		}
 	}
-	XDrawString(dpy, win, gc, width + (32*tab_replace), height + 20*k, message + j, i - j);
-	
 }
 
 
@@ -281,7 +264,7 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 					                     locks[screen]->win,
 					                     locks[screen]->colors[color]);
 					XClearWindow(dpy, locks[screen]->win);
-                                        draw_text(dpy, locks[screen]->win, 0, screen);
+					writemessage(dpy, locks[screen]->win, screen);
 				}
 				oldc = color;
 			}
@@ -404,8 +387,6 @@ main(int argc, char **argv) {
 	Display *dpy;
 	int s, nlocks, nscreens;
 
-	message = default_message;
-	
 	ARGBEGIN {
 	case 'v':
 		fprintf(stderr, "slock-"VERSION"\n");
@@ -458,11 +439,11 @@ main(int argc, char **argv) {
 		die("slock: out of memory\n");
 	for (nlocks = 0, s = 0; s < nscreens; s++) {
 		if ((locks[s] = lockscreen(dpy, &rr, s)) != NULL) {
-		        draw_text(dpy, locks[s]->win, 0, s);
+			writemessage(dpy, locks[s]->win, s);
 			nlocks++;
-                } else {
+		} else {
 			break;
-                }
+		}
 	}
 	XSync(dpy, 0);
 

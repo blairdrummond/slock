@@ -18,4 +18,10 @@ static const int controlkeyclear = 0;
 static const int timetocancel = 3;
 
 /* default message */
-static const char * default_message = "Suckless: Software that sucks less.";
+static const char * message = "Suckless: Software that sucks less.";
+
+/* text color */
+static const char * text_color = "#000000";
+
+/* text size (must be a valid size) */
+static const char * text_size = "6x10";
